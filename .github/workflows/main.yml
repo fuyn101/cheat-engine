@@ -1,0 +1,66 @@
+name: Cheat Engine Build
+
+on:
+  push:
+    branches: [ "master" ]
+  workflow_dispatch:
+
+env:
+  LAZARUS_VERSION: 2.2.2
+  FPC_VERSION: 3.2.2
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Lazarus IDE
+        run: |
+          # 安装主程序
+          curl -L -o lazarus.exe https://downloads.sourceforge.net/project/lazarus/Lazarus%20Windows%2064%20bits/Lazarus%20${{ env.LAZARUS_VERSION }}/lazarus-${{ env.LAZARUS_VERSION }}-fpc-${{ env.FPC_VERSION }}-win64.exe
+          start-process -Wait -FilePath .\lazarus.exe -ArgumentList /SILENT
+
+          # 安装交叉编译组件
+          curl -L -o cross.exe https://downloads.sourceforge.net/project/lazarus/Lazarus%20Windows%2064%20bits/Lazarus%20${{ env.LAZARUS_VERSION }}/lazarus-${{ env.LAZARUS_VERSION }}-fpc-${{ env.FPC_VERSION }}-cross-i386-win32-win64.exe
+          start-process -Wait -FilePath .\cross.exe -ArgumentList /SILENT
+
+      - name: Set up MSBuild
+        uses: microsoft/setup-msbuild@v1
+        with:
+          vs-version: '17.0'  # Visual Studio 2022兼容模式
+
+      - name: Compile Main Project
+        run: |
+          # 添加Lazarus到系统PATH
+          $lazarusPath = "${env:ProgramFiles(x86)}\Lazarus"
+          Add-Content $env:GITHUB_PATH "$lazarusPath\mingw\bin"
+          Add-Content $env:GITHUB_PATH "$lazarusPath"
+
+          # 编译主程序
+          lazbuild.exe --build-mode="Release (32bit)" "Cheat Engine\cheatengine.lpi"
+          lazbuild.exe --build-mode="Release (64bit)" "Cheat Engine\cheatengine.lpi"
+
+      - name: Compile Support Projects
+        run: |
+          # 编译C#项目
+          MSBuild.exe "Cheat Engine\DirectXMess.sln" /p:Configuration=Release /p:Platform="x86"
+          MSBuild.exe "Cheat Engine\DirectXMess.sln" /p:Configuration=Release /p:Platform="x64"
+
+          # 编译Pascal项目
+          lazbuild.exe --os=win32 --cpu=i386 "Cheat Engine\speedhack.lpr"
+          lazbuild.exe --os=win64 --cpu=x86_64 "Cheat Engine\speedhack.lpr"
+
+          # 编译其他核心组件
+          MSBuild.exe "Cheat Engine\DotNetcompiler.sln" /p:Configuration=Release
+          MSBuild.exe "Cheat Engine\monodatacollector.sln" /p:Configuration=Release
+
+      - name: Archive Artifacts
+        uses: actions/upload-artifact@v3
+        with:
+          name: cheat-engine-binaries
+          path: |
+            Cheat Engine\bin\*
+            Cheat Engine\lib\*
+            Cheat Engine\clang\*
